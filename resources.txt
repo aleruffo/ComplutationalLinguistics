@@ -1,0 +1,17 @@
+The students should build a classifier that understands irony, misogyny and stance in
+short texts such as social media posts. An evaluation should be also performed on the
+ability of the model to give a reason for the choice.
+The students should compare two approaches based on LLM: zero-shot and few-shot.
+Experiments have to be performed on at least two LLMs (such as Llama and Mixtral)
+and two languages.
+
+The AMI 2018 dataset collects 5,000 tweets written in Italian and 5,000 in English annotated for misogynistic content. 
+🌐🔗 -> https://live.european-language-grid.eu/catalogue/corpus/7272.
+
+MultiPiCo is a multilingual perspectivist corpus of ironic short conversations in different languages
+and linguistic varieties extracted from Twitter and Reddit. 
+🌐🔗 -> https://www.amazon.science/publications/multipico-multilingual-perspectivist-irony-corpus
+
+x-stance is a large-scale stance detection dataset from comments written by candidates of elections
+in Switzerland, consisting of German, French and Italian text. 
+🌐🔗 -> https://paperswithcode.com/dataset/x-stance
