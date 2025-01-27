@@ -10,6 +10,12 @@ AVAILABLE_MODELS = ["deepseek-r1:8b", "llama2-uncensored", "llama3.2"]
 DATA_CATEGORIES = ["irony", "misogyny", "stance"]
 FEW_SHOT_EXAMPLES = 3
 
+LANGUAGE_CONFIG = {
+    "misogyny": {"it": 50, "en": 50},
+    "irony": {"it": 50, "en": 50},
+    "stance": {"it": 50, "fr": 50}
+}
+
 # Prompt templates for different analysis types
 PROMPTS = {
     "misogyny": {
@@ -100,17 +106,22 @@ def get_few_shot_examples(df: pd.DataFrame, category: str, n_examples: int = 3) 
 # ------------------- GET TEST CASES --------------------------------   
 # Randomly selects a test case from the dataset with its true label
 # -------------------------------------------------------------------
-def get_test_case(df: pd.DataFrame, category: str) -> Tuple:
-    """Select a random test case from the dataset and return with its label."""
-    test_row = df.sample(n=1).iloc[0]
+def get_test_case(df: pd.DataFrame, category: str, language: str) -> Tuple:
+    """Select a random test case from the dataset with specified language."""
+    # Filter by language
+    language_df = df[df['language'] == language]
+    if len(language_df) == 0:
+        raise ValueError(f"No samples found for language {language} in {category}")
+    
+    test_row = language_df.sample(n=1).iloc[0]
     label = "yes" if test_row['label'] == 1 else "no"
     
     if category == "irony":
-        return (test_row['post'], test_row['reply'], label)
+        return (test_row['post'], test_row['reply'], label, language)
     elif category == "misogyny":
-        return (test_row['text'], label)
+        return (test_row['text'], label, language)
     else:  # stance
-        return (test_row['question'], test_row['comment'], label)
+        return (test_row['question'], test_row['comment'], label, language)
 
 # ------------------- MODEL TEST --------------------------------   
 # Tests multiple language models using both zero-shot and few-shot approaches
@@ -189,13 +200,13 @@ def evaluate_responses(category: str, test_case: Tuple, model_results: Dict) -> 
         few_shot_binary = parse_response_to_binary(approaches['few_shot'])
         responses_text += f"\n{model}:\nZero-shot: {approaches['zero_shot']} \nFew-shot: {approaches['few_shot']}\n"
     
-    # Format prompt based on category
+    # Format prompt based on category, accounting for language in test_case
     if category == "misogyny":
-        text, label = test_case
-        prompt = EVALUATION_PROMPTS[category].format(label, text, responses_text)
-    else:
-        text1, text2, label = test_case
-        prompt = EVALUATION_PROMPTS[category].format(label, text1, text2, responses_text)
+        text, label, language = test_case
+        prompt = EVALUATION_PROMPTS[category].format(text, label, responses_text)
+    else:  # irony and stance
+        text1, text2, label, language = test_case
+        prompt = EVALUATION_PROMPTS[category].format(text1, text2, label, responses_text)
     
     # Get deepseek evaluation
     evaluation = ollama.chat(
@@ -205,112 +216,111 @@ def evaluate_responses(category: str, test_case: Tuple, model_results: Dict) -> 
     
     return evaluation
 
-def run_experiments(n_iterations: int = 5):
-    """Run experiments multiple times and save results to Excel."""
-    # Initialize results list
+def run_experiments():
+    """Run experiments for specified languages and save results to Excel."""
     all_results = []
     
     for category in DATA_CATEGORIES:
-        print(f"\n=== Running {n_iterations} iterations for {category.upper()} ===")
-        
-        # Load dataset once per category
+        print(f"\n=== Running tests for {category.upper()} ===")
         df = load_dataset(category)
         
-        for i in range(n_iterations):
-            print(f"\nIteration {i+1}/{n_iterations}")
+        # Run tests for each language
+        for language, n_iterations in LANGUAGE_CONFIG[category].items():
+            print(f"\nTesting {language.upper()} samples")
             
-            # Get test case
-            test_case = get_test_case(df, category)
-            
-            # Get model results
-            results = test_models(test_case[:-1], category)
-            
-            # Get deepseek evaluation
-            deepseek_eval = evaluate_responses(category, test_case, results)
-            
-            # Format row based on category
-            row = {
-                'category': category,
-                'expected_label': 1 if test_case[-1].lower() == 'yes' else 0,
-                'llama2_zeroshot_binary': parse_response_to_binary(results['llama2-uncensored']['zero_shot']),
-                'llama2_zeroshot_response': results['llama2-uncensored']['zero_shot'],
-                'llama2_fewshot_binary': parse_response_to_binary(results['llama2-uncensored']['few_shot']),
-                'llama2_fewshot_response': results['llama2-uncensored']['few_shot'],
-                'llama3_zeroshot_binary': parse_response_to_binary(results['llama3.2']['zero_shot']),
-                'llama3_zeroshot_response': results['llama3.2']['zero_shot'],
-                'llama3_fewshot_binary': parse_response_to_binary(results['llama3.2']['few_shot']),
-                'llama3_fewshot_response': results['llama3.2']['few_shot'],
-                'deepseek_eval': deepseek_eval
-            }
-            
-            # Add test case text based on category
-            if category == "misogyny":
-                row['test_case_text'] = test_case[0]
-                row['test_case_text2'] = ''
-            else:
-                row['test_case_text'] = test_case[0]
-                row['test_case_text2'] = test_case[1]
-            
-            all_results.append(row)
-            
-            # Print progress
-            if (i + 1) % 10 == 0:
-                print(f"Completed {i + 1} iterations for {category}")
+            for i in range(n_iterations):
+                print(f"Iteration {i+1}/{n_iterations}")
+                
+                # Get language-specific test case
+                test_case = get_test_case(df, category, language)
+                results = test_models(test_case[:-2], category)  # Exclude label and language
+                deepseek_eval = evaluate_responses(category, test_case, results)
+                
+                # Format row with language information
+                row = {
+                    'category': category,
+                    'language': language,
+                    'expected_label': 1 if test_case[-2].lower() == 'yes' else 0,
+                    'llama2_zeroshot_binary': parse_response_to_binary(results['llama2-uncensored']['zero_shot']),
+                    'llama2_zeroshot_response': results['llama2-uncensored']['zero_shot'],
+                    'llama2_fewshot_binary': parse_response_to_binary(results['llama2-uncensored']['few_shot']),
+                    'llama2_fewshot_response': results['llama2-uncensored']['few_shot'],
+                    'llama3_zeroshot_binary': parse_response_to_binary(results['llama3.2']['zero_shot']),
+                    'llama3_zeroshot_response': results['llama3.2']['zero_shot'],
+                    'llama3_fewshot_binary': parse_response_to_binary(results['llama3.2']['few_shot']),
+                    'llama3_fewshot_response': results['llama3.2']['few_shot'],
+                    'deepseek_eval': deepseek_eval
+                }
+                
+                # Add test case text
+                if category == "misogyny":
+                    row['test_case_text'] = test_case[0]
+                    row['test_case_text2'] = ''
+                else:
+                    row['test_case_text'] = test_case[0]
+                    row['test_case_text2'] = test_case[1]
+                
+                all_results.append(row)
     
-    # Create DataFrame and save to Excel
+    # Create DataFrame and save to Excel with language comparison
     results_df = pd.DataFrame(all_results)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = f"results/experiment_results_{timestamp}.xlsx"
     os.makedirs('results', exist_ok=True)
     
-    # Create Excel writer with xlsxwriter engine for better formatting
     with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
-        # Write all results to first sheet
+        # Write all results
         results_df.to_excel(writer, sheet_name='All Results', index=False)
         
-        # Create separate sheets for each category
+        # Create sheets by category and language
         for category in DATA_CATEGORIES:
             category_df = results_df[results_df['category'] == category]
             category_df.to_excel(writer, sheet_name=category.capitalize(), index=False)
-        
-        # Add summary sheet
-        summary_data = []
-        for category in DATA_CATEGORIES:
-            category_results = results_df[results_df['category'] == category]
-            for model in ['llama2', 'llama3']:
-                for approach in ['zeroshot', 'fewshot']:
-                    col = f"{model}_{approach}_binary"
-                    accuracy = (category_results[col] == category_results['expected_label']).mean()
-                    summary_data.append({
-                        'Category': category,
-                        'Model': model,
-                        'Approach': approach,
-                        'Accuracy': accuracy
-                    })
-        
-        pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+            
+            # Add language comparison sheet
+            summary_data = []
+            for language in LANGUAGE_CONFIG[category].keys():
+                lang_results = category_df[category_df['language'] == language]
+                for model in ['llama2', 'llama3']:
+                    for approach in ['zeroshot', 'fewshot']:
+                        col = f"{model}_{approach}_binary"
+                        accuracy = (lang_results[col] == lang_results['expected_label']).mean()
+                        summary_data.append({
+                            'Language': language,
+                            'Model': model,
+                            'Approach': approach,
+                            'Accuracy': accuracy,
+                            'Sample_Size': len(lang_results)
+                        })
+            
+            pd.DataFrame(summary_data).to_excel(
+                writer, 
+                sheet_name=f'{category}_by_language',
+                index=False
+            )
     
     print(f"\nResults saved to {output_path}")
     return results_df
 
 def main():
     """Main execution function."""
-    # Run experiments and get results DataFrame
-    results_df = run_experiments(n_iterations=50)
+    results_df = run_experiments()
     
-    # Print summary statistics
+    # Print summary statistics by language
     print("\n=== Experiment Summary ===")
     for category in DATA_CATEGORIES:
         category_results = results_df[results_df['category'] == category]
         print(f"\n{category.upper()} Results:")
-        print(f"Total samples: {len(category_results)}")
         
-        # Calculate accuracy for each model and approach
-        for model in ['llama2', 'llama3']:
-            for approach in ['zeroshot', 'fewshot']:
-                col = f"{model}_{approach}_binary"
-                accuracy = (category_results[col] == category_results['expected_label']).mean()
-                print(f"{model} {approach} accuracy: {accuracy:.2f}")
+        for language in LANGUAGE_CONFIG[category].keys():
+            lang_results = category_results[category_results['language'] == language]
+            print(f"\n{language.upper()} samples: {len(lang_results)}")
+            
+            for model in ['llama2', 'llama3']:
+                for approach in ['zeroshot', 'fewshot']:
+                    col = f"{model}_{approach}_binary"
+                    accuracy = (lang_results[col] == lang_results['expected_label']).mean()
+                    print(f"{model} {approach} accuracy: {accuracy:.2f}")
 
 if __name__ == "__main__":
     main()
